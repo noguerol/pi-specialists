@@ -26,6 +26,7 @@ execution.
 - [Protocols](#protocols)
 - [Authentication](#authentication)
 - [Budgets and batching](#budgets-and-batching)
+- [Video analysis](#video-analysis)
 - [Execution model](#execution-model)
 - [Commands](#commands)
 - [Tool API](#tool-api)
@@ -73,6 +74,9 @@ small, dedicated models exposed over HTTP — without leaving the conversation:
   background jobs and next-turn `specialist-result` delivery.
 - **Live footer line**: which specialist is running, a task summary and wallclock
   time, aggregated for concurrent work.
+- **Video analysis pipeline**: `video_analyze` samples frames for an
+  image-to-text specialist and transcribes the audio with an ASR specialist,
+  returning a visual timeline and a transcript.
 - **Operational tooling**: `/specialists doctor`, `/specialists probe`, job
   listing, validation of saved configuration.
 - **No telemetry, no external calls** other than the specialist endpoints you
@@ -127,8 +131,8 @@ independent from pi so it can be tested with plain Node:
 - **Node.js** 22 or newer (the tests use the built-in TypeScript stripping).
 - A specialist endpoint. Local llama.cpp, vLLM, LM Studio, Ollama’s
   OpenAI-compatible endpoint, OpenAI, Hugging Face and Replicate are all valid.
-- Optional, for batching:
-  - `ffmpeg` and `ffprobe` — image resize, audio split;
+- Optional, for batching and video:
+  - `ffmpeg` and `ffprobe` — image resize, audio split, video frames/audio;
   - `poppler-utils` (`pdftoppm`, `pdfinfo`) — PDF pages;
   - ImageMagick `identify` — fast image dimensions.
 
@@ -451,6 +455,62 @@ Question types depend on the model (`noul`, `choice`, `score`, `text`, `number`,
 `date`, `box`, `boxes`). Images can be passed with `input`; they are sent as
 local paths (no base64 round trip) where possible.
 
+## Video analysis
+
+The `video_analyze` tool provides a fast, end-to-end interpretation path for
+any video:
+
+1. **Probe** duration, resolution and audio with `ffprobe`.
+2. **Sample frames** — by default one frame per second up to 12 frames, then 12
+   evenly spaced frames for longer videos. Override with `frames` (1–24) or
+   `interval` (seconds).
+3. **Describe frames** with the first enabled `image-to-text` specialist (or
+   the specialist named in `vision`). Frames are sent through the normal
+   budget-aware batch pipeline, so oversized frames are resized.
+4. **Transcribe audio** with the first enabled `automatic-speech-recognition`
+   specialist (or `stt`). Audio is converted to 16 kHz mono; long audio is
+   split according to the ASR budget.
+5. **Write a report** with a visual timeline (frame timestamps and
+   descriptions) and the transcript. The full markdown report is saved to
+   `<outputDir>/<timestamp>-<name>-video.md`.
+
+```ts
+video_analyze({
+  video: "/data/product-demo.mp4",
+  wait: true
+})
+
+video_analyze({
+  video: "/data/interview.mp4",
+  frames: 8,
+  vision: "Local vision",
+  stt: "Whisper",
+  wait: false               // background job; report arrives next turn
+})
+```
+
+| Parameter | Description |
+|---|---|
+| `video` | Absolute local path or URL. |
+| `prompt` | Optional instruction for the frame/vision specialist. |
+| `frames` | Number of frames (1–24). |
+| `interval` | Seconds between frames; overrides `frames`. |
+| `vision` | Image-to-text specialist name/type. Default: first enabled `image-to-text`. |
+| `stt` | ASR specialist name/type. Default: first enabled `automatic-speech-recognition`. |
+| `output` | Report path. Default: `outputDir` with a timestamped name. |
+| `waitMs` | Inline grace before returning a job (default 500 ms). |
+| `wait` | `true` for the complete report inline; `false` for an immediate job. |
+
+If only one of the two specialists is configured, the pipeline still returns
+the half it can produce (frames/timeline or transcript) and records a warning.
+If neither is configured, it fails with a configuration hint. Video processing
+requires `ffmpeg`/`ffprobe`; the rest of the extension does not.
+
+The report is designed for the calling agent: it can use the transcript for
+spoken content and the timeline for visual context, then write the final
+user-facing interpretation. Long reports are truncated in the tool result but
+the complete file path is always included.
+
 ## Execution model
 
 A tool call waits at most `waitMs` (default **250 ms**):
@@ -533,6 +593,15 @@ specialist({
 `action: "list"` and `action: "jobs"` return immediately. `action: "result"`
 returns a completed job or reports that it is still running.
 
+### Video analysis tool
+
+`video_analyze` is a separate tool registered by the extension. It accepts the
+parameters in [Video analysis](#video-analysis) and returns the markdown report
+inline (`wait: true`) or a job id that is delivered as a `specialist-result`
+message and can be collected with
+`specialist({ action: "result", jobId })`. It runs in the same job registry and
+live footer line as specialist calls.
+
 ## Observability
 
 - **Footer**: capability markers, plus the live running line described above.
@@ -540,6 +609,7 @@ returns a completed job or reports that it is still running.
   elapsed time, budget, fallback, outputs, batch items and warnings.
 - **`/specialists list`**: masked keys and effective URLs.
 - **`/specialists probe`**: discovered context/media/batch limits.
+- **`video_analyze` reports**: timeline + transcript plus the saved report path.
 - **`/specialists doctor`**: configuration path, mode, writability, memory vs
   disk, validation and running-job count.
 - **Batch result file**: full text at `<outputDir>/…-batch.md`.
@@ -593,6 +663,11 @@ underlying command error.
 Check `ffmpeg`/`ffprobe` availability and `budget.maxAudioSeconds`; short audio
 is sent whole.
 
+**Video analysis fails immediately.**  
+Check `ffmpeg`/`ffprobe` availability and that at least one `image-to-text` or
+`automatic-speech-recognition` specialist is enabled. The error/warning names
+the missing half of the pipeline.
+
 **A batch is truncated.**  
 `budget.maxItems` (default 200) caps the number of work items. Raise it or
 split the input.
@@ -617,7 +692,7 @@ npm run typecheck
 ```
 
 `npm test` runs the Node test suite; `npm run typecheck` uses the local
-TypeScript compiler. Some tests exercise preprocessing and are skipped automatically when
+TypeScript compiler. The video tests use ffmpeg to generate a tiny clip. Some tests exercise preprocessing and are skipped automatically when
 `ffmpeg`, ImageMagick `convert` or `pdftoppm` are not installed. The suite covers:
 
 - catalog and alias resolution;

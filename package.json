@@ -1,6 +1,6 @@
 {
   "name": "pi-specialists",
-  "version": "1.0.1",
+  "version": "1.1.0",
   "description": "Budget-aware specialist router for pi: OCR, vision, media generation, speech, embeddings and System-1 decisions on local or remote models.",
   "keywords": [
     "pi-package",

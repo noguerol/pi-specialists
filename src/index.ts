@@ -31,9 +31,9 @@
 
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { accessSync, constants, existsSync } from "node:fs";
-import { dirname } from "node:path";
+import { basename, dirname } from "node:path";
 import { Type } from "typebox";
-import { SPECIALIST_TYPES, defaultPromptFor, findType } from "./catalog.ts";
+import { SPECIALIST_TYPES, canonicalType, defaultPromptFor, findType } from "./catalog.ts";
 import {
 	configFilePath,
 	describeSpecialist,
@@ -52,9 +52,12 @@ import {
 } from "./config.ts";
 import { budgetSummary, discoverBudget } from "./budget.ts";
 import { executeSpecialist, type SpecialistRunResult } from "./execute.ts";
+import { analyzeVideo } from "./video.ts";
 import { runningLine, summarizeTask, type RunningInfo } from "./status.ts";
 
 export const TOOL_NAME = "specialist";
+const VIDEO_TOOL_NAME = "video_analyze";
+const MANAGED_TOOLS = [TOOL_NAME, VIDEO_TOOL_NAME];
 const STATUS_KEY = "specialists";
 const RUNNING_KEY = "specialists-running";
 const RUNNING_REFRESH_MS = 500;
@@ -138,8 +141,8 @@ function deliverJob(pi: ExtensionAPI, ctx: ExtensionContext, job: Job): void {
 	job.delivered = true;
 	const header =
 		job.status === "done"
-			? `✅ Specialist ${job.name} (${job.type}) · ${job.elapsedMs ?? 0} ms`
-			: `❌ Specialist ${job.name} (${job.type}) after ${job.elapsedMs ?? 0} ms: ${job.error ?? "error"}`;
+			? `✅ ${job.name} (${job.type}) · ${job.elapsedMs ?? 0} ms`
+			: `❌ ${job.name} (${job.type}) after ${job.elapsedMs ?? 0} ms: ${job.error ?? "error"}`;
 	const content: ToolContentPart[] =
 		job.status === "done" && job.result ? resultContent(job.result, header) : [{ type: "text", text: header }];
 	try {
@@ -177,45 +180,32 @@ function deliverJob(pi: ExtensionAPI, ctx: ExtensionContext, job: Job): void {
 }
 
 /**
- * Start a request in the background. The promise always resolves the job; the
- * returned promise is consumed by the tool for the inline grace period.
+ * Register a job and run it. The promise always settles the job; the returned
+ * promise is consumed by the tool for the inline grace period. Used both by
+ * specialist calls and by the video pipeline.
  */
-function startJob(
+function startOperation(
 	pi: ExtensionAPI,
 	ctx: ExtensionContext,
-	specialist: Specialist,
-	request: { prompt: string; input: string[]; options?: Record<string, unknown>; output?: string },
-	signal: AbortSignal | undefined,
+	info: { name: string; type: string; summary: string },
+	runner: (onProgress: (message: string) => void) => Promise<SpecialistRunResult>,
 ): Job {
 	pruneJobs();
 	const job: Job = {
 		id: `job-${++jobSequence}`,
-		name: specialist.name,
-		type: specialist.type,
-		summary: summarizeTask(
-			request.prompt || (typeof request.options?.state === "string" ? request.options.state : ""),
-			request.input,
-			specialist.type,
-		),
+		name: info.name,
+		type: info.type,
+		summary: info.summary,
 		status: "running",
 		startedAt: Date.now(),
 		delivered: false,
 		background: false,
 		promise: Promise.resolve({} as SpecialistRunResult),
 	};
-	job.promise = executeSpecialist(
-		specialist,
-		{ prompt: request.prompt, input: request.input, options: request.options },
-		{
-			output: request.output,
-			outputDir: runtime.config.outputDir,
-			signal,
-			onProgress: (message) => {
-				job.summary = message;
-				refreshStatus(ctx);
-			},
-		},
-	)
+	job.promise = runner((message) => {
+		job.summary = message;
+		refreshStatus(ctx);
+	})
 		.then((result) => {
 			job.status = "done";
 			job.result = result;
@@ -242,6 +232,36 @@ function startJob(
 	jobs.set(job.id, job);
 	refreshStatus(ctx);
 	return job;
+}
+
+function startJob(
+	pi: ExtensionAPI,
+	ctx: ExtensionContext,
+	specialist: Specialist,
+	request: { prompt: string; input: string[]; options?: Record<string, unknown>; output?: string },
+	signal: AbortSignal | undefined,
+): Job {
+	const summary = summarizeTask(
+		request.prompt || (typeof request.options?.state === "string" ? request.options.state : ""),
+		request.input,
+		specialist.type,
+	);
+	return startOperation(
+		pi,
+		ctx,
+		{ name: specialist.name, type: specialist.type, summary },
+		(onProgress) =>
+			executeSpecialist(
+				specialist,
+				{ prompt: request.prompt, input: request.input, options: request.options },
+				{
+					output: request.output,
+					outputDir: runtime.config.outputDir,
+					signal,
+					onProgress,
+				},
+			),
+	);
 }
 
 function jobSummary(job: Job): string {
@@ -417,9 +437,13 @@ function refreshStatus(ctx: ExtensionContext): void {
 function syncToolActivation(pi: ExtensionAPI): void {
 	try {
 		const active = pi.getActiveTools();
-		const has = active.includes(TOOL_NAME);
-		if (runtime.config.enabled && !has) pi.setActiveTools([...active, TOOL_NAME]);
-		else if (!runtime.config.enabled && has) pi.setActiveTools(active.filter((name) => name !== TOOL_NAME));
+		if (runtime.config.enabled) {
+			const missing = MANAGED_TOOLS.filter((name) => !active.includes(name));
+			if (missing.length > 0) pi.setActiveTools([...active, ...missing]);
+		} else {
+			const filtered = active.filter((name) => !MANAGED_TOOLS.includes(name));
+			if (filtered.length !== active.length) pi.setActiveTools(filtered);
+		}
 	} catch {
 		// Non-interactive runtimes may not expose tool activation; the tool_call
 		// guard still blocks execution while disabled.
@@ -450,6 +474,12 @@ function capabilitiesSection(): string | undefined {
 		...(active.some((spec) => spec.protocol === "decision")
 			? [
 					'System-1 decision specialists use `state` (context) plus named `questions`: `specialist({ specialist: "...", state: "...", questions: { intent: { type: "choice", instructions: "...", criteria: { a: "...", b: "..." } } } })`. They answer in one transformers+torch pass (no token generation).',
+				]
+			: []),
+		...(active.some((spec) => findType(spec.type)?.input.includes("image")) ||
+		active.some((spec) => findType(spec.type)?.input.includes("audio"))
+			? [
+					'For videos, use `video_analyze({ video: "/path/video.mp4", wait: true })`. It samples frames and describes them with an image-to-text specialist, extracts the audio and transcribes it with an ASR specialist, then returns a timeline + transcript report.',
 				]
 			: []),
 		...lines,
@@ -570,6 +600,31 @@ async function waitForJob(
 	}
 }
 
+/** First enabled specialist of a canonical type, without ambiguity errors. */
+function firstEnabledOfType(type: string): Specialist | undefined {
+	const wanted = canonicalType(type);
+	return runtime.config.specialists.find((spec) => spec.enabled && canonicalType(spec.type) === wanted);
+}
+
+/**
+ * Resolve an explicit video analyst or fall back to the first enabled
+ * specialist of the expected type. Validates that it accepts the media kind.
+ */
+function resolveVideoAnalyst(
+	ref: string | undefined,
+	defaultType: string,
+	kind: "image" | "audio",
+): Specialist | undefined {
+	if (!ref) return firstEnabledOfType(defaultType);
+	const { specialist, error } = resolveSpecialist(runtime.config, ref);
+	if (!specialist) throw new Error(error ?? `specialist "${ref}" does not exist`);
+	if (!specialist.enabled) throw new Error(`Specialist "${specialist.name}" is disabled`);
+	if (!findType(specialist.type)?.input.includes(kind)) {
+		throw new Error(`Specialist "${specialist.name}" (${specialist.type}) does not accept ${kind} input`);
+	}
+	return specialist;
+}
+
 // ─── Extension entry point ──────────────────────────────────────────────────
 
 export default function specialistsExtension(pi: ExtensionAPI): void {
@@ -607,7 +662,7 @@ export default function specialistsExtension(pi: ExtensionAPI): void {
 
 	// Fail closed while the extension is off.
 	pi.on("tool_call", async (event) => {
-		if (event.toolName !== TOOL_NAME) return;
+		if (!MANAGED_TOOLS.includes(event.toolName)) return;
 		if (!runtime.config.enabled) {
 			return {
 				block: true,
@@ -791,6 +846,115 @@ export default function specialistsExtension(pi: ExtensionAPI): void {
 				],
 				details: {
 					action: "run",
+					jobId: job.id,
+					mode: "background",
+					dispatchMs,
+					status: "running",
+					waitMs: graceMs,
+				},
+			};
+		},
+	});
+
+	pi.registerTool({
+		name: VIDEO_TOOL_NAME,
+		label: "Analyze video",
+		description:
+			"Analyze a video end-to-end. Samples evenly spaced frames (default: 1 fps up to 12 frames, then 12 evenly spaced; " +
+			"override with frames/interval), describes them with an image-to-text specialist, extracts the audio and " +
+			"transcribes it with an ASR specialist, and returns a markdown report with a visual timeline and transcript. " +
+			"The full report is saved to a file. If no explicit specialists are given, the first enabled image-to-text " +
+			"and ASR specialists are used. Requires ffmpeg/ffprobe. Runs in the background by default; pass wait:true " +
+			"for the complete report inline.",
+		promptSnippet: "video_analyze: sample frames and transcribe audio to understand a video",
+		parameters: Type.Object({
+			video: Type.String({ description: "Absolute path or URL of the video" }),
+			prompt: Type.Optional(Type.String({ description: "Instruction for the frame/image-to-text specialist" })),
+			frames: Type.Optional(
+				Type.Number({ description: "Number of frames to sample (1-24; default: up to 12 by duration)" }),
+			),
+			interval: Type.Optional(
+				Type.Number({ description: "Seconds between frames (overrides frames; e.g. 5 for one frame every 5s)" }),
+			),
+			vision: Type.Optional(
+				Type.String({ description: "Image-to-text specialist name/type (default: first enabled image-to-text)" }),
+			),
+			stt: Type.Optional(
+				Type.String({ description: "ASR specialist name/type (default: first enabled automatic-speech-recognition)" }),
+			),
+			output: Type.Optional(Type.String({ description: "Path for the markdown report (optional)" })),
+			waitMs: Type.Optional(
+				Type.Number({ description: "Inline grace in milliseconds before returning a background job (default 500)" }),
+			),
+			wait: Type.Optional(
+				Type.Boolean({ description: "true = wait for the full report; false = return a job immediately" }),
+			),
+		}),
+		defaultActive: runtime.config.enabled,
+		executionMode: "parallel",
+		async execute(_toolCallId, params, signal, _onUpdate, ctx) {
+			if (!runtime.config.enabled) {
+				throw new Error("Specialists are disabled. Run /specialists on to enable them.");
+			}
+			const vision = resolveVideoAnalyst(params.vision, "image-to-text", "image");
+			const stt = resolveVideoAnalyst(params.stt, "automatic-speech-recognition", "audio");
+			if (!vision && !stt) {
+				throw new Error(
+					"Configure an image-to-text specialist, an automatic-speech-recognition specialist, or both before analyzing a video.",
+				);
+			}
+			const waitMode = params.wait;
+			const videoName = basename(String(params.video).split("?")[0]) || "video";
+			const summary = `${videoName} · ${params.frames ? `${params.frames} frames` : "auto frames"}`;
+			const job = startOperation(
+				pi,
+				ctx,
+				{ name: "Video analysis", type: "video-text-to-text", summary },
+				(onProgress) =>
+					analyzeVideo(String(params.video), vision, stt, {
+						frames: params.frames,
+						interval: params.interval,
+						prompt: params.prompt,
+						output: params.output,
+						outputDir: runtime.config.outputDir,
+						signal: waitMode === true ? signal : undefined,
+						onProgress,
+					}),
+			);
+			const dispatchMs = Date.now() - job.startedAt;
+			const graceMs =
+				waitMode === true
+					? 30 * 60 * 1000
+					: waitMode === false
+						? 0
+						: Math.max(0, Math.min(params.waitMs ?? 500, 10 * 60 * 1000));
+			const outcome = await waitForJob(job, graceMs);
+
+			if (outcome.status === "done") {
+				job.delivered = true;
+				return {
+					content: resultContent(outcome.result, `✅ Video analysis · ${job.elapsedMs} ms`),
+					details: { action: "video", jobId: job.id, mode: "inline", dispatchMs, ...outcome.result.details },
+				};
+			}
+			if (outcome.status === "error") {
+				throw new Error(`Video analysis: ${outcome.error}`);
+			}
+
+			job.background = true;
+			deliverJob(pi, ctx, job);
+			return {
+				content: [
+					{
+						type: "text",
+						text:
+							`⏱️ Video analysis running in the background · job ${job.id} · dispatch ${dispatchMs} ms.\n` +
+							`No need to wait: the report will arrive as a \`specialist-result\` message on the next turn. ` +
+							`To collect it now use specialist({ action: "result", jobId: "${job.id}" }).`,
+					},
+				],
+				details: {
+					action: "video",
 					jobId: job.id,
 					mode: "background",
 					dispatchMs,

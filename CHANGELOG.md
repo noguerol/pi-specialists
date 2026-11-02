@@ -4,6 +4,20 @@ All notable changes to this project are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/) and
 [Semantic Versioning](https://semver.org/).
 
+## [1.1.0] - 2026-11-02
+
+### Added
+
+- `video_analyze` pipeline: probes the video, samples evenly spaced frames
+  (1 fps up to 12, then 12 across longer videos), describes them with an
+  image-to-text specialist, extracts audio and transcribes it with an ASR
+  specialist, and writes a markdown report with a visual timeline and
+  transcript.
+- Background job integration, live footer progress (`frames`, `vision`,
+  `audio`) and `specialist-result` delivery for video analysis.
+- Frame/interval overrides, explicit specialist selection, partial results when
+  only vision or only ASR is configured, and a saved full report.
+
 ## [1.0.1] - 2026-11-02
 
 ### Fixed
@@ -46,5 +60,6 @@ First public release.
 - Test suite covering logic, protocols, budgets, preprocessing, batching and
   menu navigation.
 
+[1.1.0]: https://github.com/noguerol/pi-specialists/releases/tag/v1.1.0
 [1.0.1]: https://github.com/noguerol/pi-specialists/releases/tag/v1.0.1
 [1.0.0]: https://github.com/noguerol/pi-specialists/releases/tag/v1.0.0
