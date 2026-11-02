@@ -62,6 +62,7 @@ const IMAGE_RECREATE_TOOL_NAME = "image_recreate";
 const MANAGED_TOOLS = [TOOL_NAME, VIDEO_TOOL_NAME, IMAGE_RECREATE_TOOL_NAME];
 const STATUS_KEY = "specialists";
 const RUNNING_KEY = "specialists-running";
+const WIDGET_KEY = "specialists-live";
 const RUNNING_REFRESH_MS = 500;
 const RUNNING_LINGER_MS = 700;
 const MAX_TOOL_TEXT = 24_000;
@@ -405,20 +406,25 @@ function stopRunningTimer(): void {
 }
 
 function writeStatus(ctx: ExtensionContext): boolean {
+	const running = activeRunningText();
 	try {
-		const running = activeRunningText();
-		const base = statusText(ctx);
-		// Running information goes first so a narrow footer never truncates it
-		// behind the capability markers.
-		ctx.ui.setStatus(STATUS_KEY, running ? `${running} · ${base}` : base);
+		ctx.ui.setStatus(STATUS_KEY, statusText(ctx));
 		ctx.ui.setStatus(RUNNING_KEY, undefined);
-		return true;
 	} catch {
 		// UI gone; stop ticking
 		stopRunningTimer();
 		runningCtx = undefined;
 		return false;
 	}
+	// A dedicated widget below the editor is not affected by other extensions'
+	// footer statuses or a narrow footer. It disappears when no job is active
+	// (and after the short linger for very fast jobs).
+	try {
+		ctx.ui.setWidget(WIDGET_KEY, running ? [running] : undefined, { placement: "belowEditor" });
+	} catch {
+		// Widgets are optional (RPC/print modes); keep the rest working.
+	}
+	return true;
 }
 
 function refreshStatus(ctx: ExtensionContext): void {
@@ -655,6 +661,7 @@ export default function specialistsExtension(pi: ExtensionAPI): void {
 		try {
 			ctx.ui.setStatus(STATUS_KEY, undefined);
 			ctx.ui.setStatus(RUNNING_KEY, undefined);
+			ctx.ui.setWidget(WIDGET_KEY, undefined, { placement: "belowEditor" });
 		} catch {
 			// ignore
 		}

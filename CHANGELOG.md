@@ -4,6 +4,17 @@ All notable changes to this project are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/) and
 [Semantic Versioning](https://semver.org/).
 
+## [1.3.1] - 2026-11-02
+
+### Fixed
+
+- The live running line moved from the shared footer to a dedicated one-line
+  widget below the editor. With several extensions installed, the footer
+  status could be truncated or pushed off-screen; the widget remains visible
+  regardless of footer crowding or terminal width, updates every 500 ms,
+  aggregates concurrent jobs, keeps a 700 ms linger for short jobs, and clears
+  when work finishes. Capability markers stay in the footer.
+
 ## [1.3.0] - 2026-11-02
 
 ### Added
@@ -100,6 +111,7 @@ First public release.
 - Test suite covering logic, protocols, budgets, preprocessing, batching and
   menu navigation.
 
+[1.3.1]: https://github.com/noguerol/pi-specialists/releases/tag/v1.3.1
 [1.3.0]: https://github.com/noguerol/pi-specialists/releases/tag/v1.3.0
 [1.2.0]: https://github.com/noguerol/pi-specialists/releases/tag/v1.2.0
 [1.1.0]: https://github.com/noguerol/pi-specialists/releases/tag/v1.1.0

@@ -632,17 +632,19 @@ A tool call waits at most `waitMs` (default **250 ms**):
 5. `action: "result"` collects a job; `action: "jobs"` lists running/recent jobs.
 
 Tool calls use `executionMode: "parallel"`, so independent specialists can run
-concurrently. The footer shows one line per running set:
+concurrently. A dedicated one-line widget **below the editor** shows the active
+work:
 
 ```text
 ⏳ 👁️ vision-model: Describe the image · sample.jpg 1.4s
 ⏳ 👁️ vision-model: Describe the image 2.0s · ⚡ Decider: classify the prompt 0.6s
 ```
 
-The line disappears when the last job finishes; the capability markers
-(`👁️● 👂●`) remain in the footer. The running text is drawn first so it is not
-truncated behind the markers, and jobs shorter than 700 ms keep the line on
-screen for that window so a 35 ms decision is still visible.
+The widget is independent of the shared footer, so it remains visible when
+other extensions fill or truncate the footer. It disappears when the last job
+finishes; the capability markers (`👁️● 👂●`) remain in the footer. Jobs shorter
+than 700 ms keep the line on screen for that window so a 35 ms decision is
+still visible.
 
 ## Commands
 
@@ -714,7 +716,9 @@ live footer line as specialist calls.
 
 ## Observability
 
-- **Footer**: capability markers, plus the live running line described above.
+- **Live widget**: one line below the editor with active specialist/video/image
+  work, progress and wallclock time. The footer keeps only the capability
+  markers so other extensions cannot hide the live line.
 - **Tool details**: specialist, type, protocol, model, endpoint, HTTP status,
   elapsed time, budget, fallback, outputs, batch items and warnings.
 - **`/specialists list`**: masked keys and effective URLs.
