@@ -6,6 +6,7 @@ embeddings and System-1 decisions to the right local or remote model — with
 automatic context discovery, media preprocessing, batching and non-blocking
 execution.
 
+[![CI](https://github.com/noguerol/pi-specialists/actions/workflows/ci.yml/badge.svg)](https://github.com/noguerol/pi-specialists/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 ![Node](https://img.shields.io/badge/node-%3E%3D22-brightgreen)
 ![pi](https://img.shields.io/badge/pi-%3E%3D1.4-blueviolet)
