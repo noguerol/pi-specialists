@@ -83,13 +83,18 @@ test("splits long audio into budget-sized chunks", { skip: !has("ffmpeg") }, asy
 	}
 });
 
-test("PDFs become page images", { skip: !has("convert") || !has("pdftoppm") }, async () => {
+test("PDFs become page images", { skip: !has("convert") || !has("pdftoppm") }, async (t) => {
 	const dir = await mkdtemp(join(tmpdir(), "pi-preprocess-pdf-"));
 	try {
 		run("convert", ["-size", "600x400", "xc:white", join(dir, "p1.png")]);
 		run("convert", ["-size", "600x400", "xc:white", join(dir, "p2.png")]);
 		const pdf = join(dir, "doc.pdf");
-		run("convert", [join(dir, "p1.png"), join(dir, "p2.png"), pdf]);
+		try {
+			run("convert", [join(dir, "p1.png"), join(dir, "p2.png"), pdf]);
+		} catch {
+			t.skip("ImageMagick cannot write PDFs on this system");
+			return;
+		}
 		const spec = normalizeSpecialist({ name: "ocr", type: "ocr", baseUrl: "http://127.0.0.1" });
 		const prepared = await prepareInputs([pdf], spec, budget({ pdfDpi: 72 }));
 		assert.equal(prepared.items.length, 2);
