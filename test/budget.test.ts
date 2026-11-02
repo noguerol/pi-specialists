@@ -124,6 +124,6 @@ test("estimateTokens and truncateToTokens keep prompts within budget", () => {
 	assert.equal(fitted.truncated, true);
 	assert.ok(estimateTokens(fitted.text) <= 102);
 	assert.ok(fitted.text.includes("truncated to budget"));
-	const short = truncateToTokens("hola", 100);
-	assert.deepEqual(short, { text: "hola", truncated: false });
+	const short = truncateToTokens("hello", 100);
+	assert.deepEqual(short, { text: "hello", truncated: false });
 });

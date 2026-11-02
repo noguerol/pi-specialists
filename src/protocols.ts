@@ -505,7 +505,7 @@ function binaryMime(contentType: string | null, spec: Specialist): string | unde
 }
 
 /**
- * Qwen3-ASR (via llama.cpp) returns "language Spanish<asr_text>Hola...".
+ * Qwen3-ASR (via llama.cpp) returns "language Spanish<asr_text>Hello...".
  * Strip the prefix and keep the detected language as metadata.
  */
 export function extractTranscript(text: string): { text: string; language?: string } | undefined {

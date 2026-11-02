@@ -75,7 +75,7 @@ test("runningLine keeps at most three entries and summarises the rest", () => {
 
 test("runningLine truncates long names, tasks and updates the elapsed time", () => {
 	const line = runningLine(
-		[job("un-nombre-de-especialista-muy-largo", "system-1", "x".repeat(200), 0)],
+		[job("a-very-long-specialist-name", "system-1", "x".repeat(200), 0)],
 		12_000,
 	);
 	assert.ok(line.includes("…"), line);

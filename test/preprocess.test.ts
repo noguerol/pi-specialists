@@ -44,7 +44,7 @@ test("directories expand into budget-sized items and clean up", { skip: !has("co
 	try {
 		run("convert", ["-size", "2000x1500", "xc:red", join(dir, "big.png")]);
 		run("convert", ["-size", "100x100", "xc:blue", join(dir, "small.png")]);
-		await writeFile(join(dir, "notes.txt"), "hola");
+		await writeFile(join(dir, "notes.txt"), "hello");
 		const spec = normalizeSpecialist({ name: "dir", type: "image-to-text", baseUrl: "http://127.0.0.1" });
 		assert.equal(await wantsPreprocessing([dir], spec), true);
 		const prepared = await prepareInputs([dir], spec, budget({ maxImageSide: 1_000, maxImagePixels: 1_000_000 }));

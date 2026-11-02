@@ -75,7 +75,7 @@ test("applyAuth covers bearer, header, query, basic and none", () => {
 });
 
 test("the optional port overrides the baseUrl port", () => {
-	const built = buildRequest(spec({ baseUrl: "http://localhost/v1", port: 8080 }), { prompt: "hola" });
+	const built = buildRequest(spec({ baseUrl: "http://localhost/v1", port: 8080 }), { prompt: "hello" });
 	assert.equal(built.url, "http://localhost:8080/v1/chat/completions");
 });
 
@@ -114,7 +114,7 @@ test("openai-chat rejects video input with a clear message", () => {
 test("auth via query parameter lands in the URL", () => {
 	const built = buildRequest(
 		spec({ apiKey: "k", auth: { type: "query", queryName: "key" }, query: { tenant: "a" } }),
-		{ prompt: "hola" },
+		{ prompt: "hello" },
 	);
 	assert.ok(built.url.includes("?key=k&tenant=a") || built.url.includes("?tenant=a&key=k"));
 });
@@ -150,12 +150,12 @@ test("openai audio endpoints build multipart and JSON bodies", () => {
 	assert.ok(transcription.body instanceof FormData);
 
 	const speech = buildRequest(spec({ type: "tts", protocol: "openai-speech" }), {
-		prompt: "hola mundo",
+		prompt: "hello world",
 		options: { voice: "nova" },
 	});
 	assert.equal(speech.url, "http://localhost:1234/v1/audio/speech");
 	const body = bodyJson(speech);
-	assert.equal(body.input, "hola mundo");
+	assert.equal(body.input, "hello world");
 	assert.equal(body.voice, "nova");
 	assert.equal(body.response_format, "mp3");
 });
@@ -235,19 +235,19 @@ test("decision sidecars get a default text question and URL media", () => {
 });
 
 test("ASR transcripts strip the language<asr_text> prefix", async () => {
-	assert.deepEqual(extractTranscript("language Spanish<asr_text>Hola mundo"), {
+	assert.deepEqual(extractTranscript("language Spanish<asr_text>Hello world"), {
 		language: "Spanish",
-		text: "Hola mundo",
+		text: "Hello world",
 	});
 	const parsed = await parseResponse(
 		new Response(
-			JSON.stringify({ type: "transcript.text.done", text: "language Spanish<asr_text>Hola mundo" }),
+			JSON.stringify({ type: "transcript.text.done", text: "language Spanish<asr_text>Hello world" }),
 			{ headers: { "content-type": "application/json" } },
 		),
 		spec({ type: "asr", protocol: "openai-transcriptions" }),
 	);
 	assert.equal(parsed.kind, "text");
-	assert.equal(parsed.text, "Hola mundo");
+	assert.equal(parsed.text, "Hello world");
 	assert.equal(parsed.language, "Spanish");
 });
 
@@ -269,13 +269,13 @@ test("custom-json substitutes template placeholders", () => {
 
 test("parseResponse extracts text from chat and transcription JSON", async () => {
 	const chat = await parseResponse(
-		new Response(JSON.stringify({ choices: [{ message: { content: "hola" } }] }), {
+		new Response(JSON.stringify({ choices: [{ message: { content: "hello" } }] }), {
 			headers: { "content-type": "application/json" },
 		}),
 		spec({ type: "text-generation" }),
 	);
 	assert.equal(chat.kind, "text");
-	assert.equal(chat.text, "hola");
+	assert.equal(chat.text, "hello");
 
 	const asr = await parseResponse(
 		new Response(JSON.stringify({ text: "transcript" }), { headers: { "content-type": "application/json" } }),

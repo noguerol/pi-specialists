@@ -131,7 +131,7 @@ test("tts specialist saves binary audio with the right extension", async () => {
 		},
 		async (baseUrl) => {
 			const spec = normalizeSpecialist({ name: "voice", type: "tts", baseUrl: `${baseUrl}/v1`, model: "tts-1" });
-			const result = await executeSpecialist(spec, { prompt: "hola" }, { outputDir: outDir });
+			const result = await executeSpecialist(spec, { prompt: "hello" }, { outputDir: outDir });
 			assert.equal(result.outputs.length, 1);
 			assert.equal(result.outputs[0].mimeType, "audio/mpeg");
 			assert.ok(result.outputs[0].path.endsWith(".mp3"));
@@ -275,7 +275,7 @@ test("a directory of audio is split and transcribed in one batch", { skip: !has(
 		await withServer(
 			{
 				"/audio/transcriptions": (_req, res) =>
-					json(res, { type: "transcript.text.done", text: "language Spanish<asr_text>Hola" }),
+					json(res, { type: "transcript.text.done", text: "language Spanish<asr_text>Hello" }),
 			},
 			async (baseUrl, seen) => {
 				const spec = normalizeSpecialist({

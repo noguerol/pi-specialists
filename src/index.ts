@@ -940,7 +940,7 @@ ${budgetSummary(budget)}`);
 						);
 						return;
 					}
-					const prompt = positional.slice(1).join(" ") || defaultPromptFor(target.type) || "Hola, responde OK.";
+					const prompt = positional.slice(1).join(" ") || defaultPromptFor(target.type) || "Hello, reply OK.";
 					const input = flags.input ? [flags.input] : [];
 					const testOptions: Record<string, unknown> = {};
 					if (flags.state) testOptions.state = flags.state;
