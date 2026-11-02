@@ -58,6 +58,7 @@ export const TOOL_NAME = "specialist";
 const STATUS_KEY = "specialists";
 const RUNNING_KEY = "specialists-running";
 const RUNNING_REFRESH_MS = 500;
+const RUNNING_LINGER_MS = 700;
 const MAX_TOOL_TEXT = 24_000;
 const MAX_JOBS = 32;
 const JOB_TTL_MS = 10 * 60 * 1000;
@@ -93,6 +94,9 @@ interface Job {
 	delivered: boolean;
 	/** True once the tool returned a job id instead of the inline result. */
 	background: boolean;
+	/** Frozen line kept briefly for jobs too fast to be seen. */
+	lingerLine?: string;
+	lingerUntil?: number;
 	promise: Promise<SpecialistRunResult>;
 }
 
@@ -217,6 +221,7 @@ function startJob(
 			job.result = result;
 			job.elapsedMs = Date.now() - job.startedAt;
 			job.finishedAt = Date.now();
+			keepFinishedJobVisible(job);
 			refreshStatus(ctx);
 			deliverJob(pi, ctx, job);
 			return result;
@@ -226,6 +231,7 @@ function startJob(
 			job.error = errorMessage(error);
 			job.elapsedMs = Date.now() - job.startedAt;
 			job.finishedAt = Date.now();
+			keepFinishedJobVisible(job);
 			refreshStatus(ctx);
 			deliverJob(pi, ctx, job);
 			throw error;
@@ -331,16 +337,39 @@ function runningJobs(): Job[] {
 		.sort((a, b) => a.startedAt - b.startedAt);
 }
 
-function runningStatusText(): string | undefined {
+/**
+ * Keep the line on screen for a minimum time when a job finishes faster than
+ * the first repaint. Long jobs clear immediately.
+ */
+function keepFinishedJobVisible(job: Job): void {
+	const elapsed = job.elapsedMs ?? 0;
+	if (elapsed >= RUNNING_LINGER_MS) return;
+	const finishedAt = job.finishedAt ?? Date.now();
+	job.lingerLine = runningLine(
+		[{ name: job.name, type: job.type, summary: job.summary, startedAt: finishedAt - elapsed }],
+		finishedAt,
+	);
+	job.lingerUntil = Date.now() + (RUNNING_LINGER_MS - elapsed);
+}
+
+function activeRunningText(): string | undefined {
 	const running = runningJobs();
-	if (running.length === 0) return undefined;
-	const infos: RunningInfo[] = running.map((job) => ({
-		name: job.name,
-		type: job.type,
-		summary: job.summary,
-		startedAt: job.startedAt,
-	}));
-	return runningLine(infos);
+	if (running.length > 0) {
+		const infos: RunningInfo[] = running.map((job) => ({
+			name: job.name,
+			type: job.type,
+			summary: job.summary,
+			startedAt: job.startedAt,
+		}));
+		return runningLine(infos);
+	}
+	const now = Date.now();
+	let lingering: Job | undefined;
+	for (const job of jobs.values()) {
+		if (!job.lingerLine || !job.lingerUntil || job.lingerUntil <= now) continue;
+		if (!lingering || job.lingerUntil > (lingering.lingerUntil ?? 0)) lingering = job;
+	}
+	return lingering?.lingerLine;
 }
 
 // The footer line is refreshed by a timer so wallclock time advances even when
@@ -353,31 +382,33 @@ function stopRunningTimer(): void {
 	runningTimer = undefined;
 }
 
-function writeRunningStatus(ctx: ExtensionContext): void {
+function writeStatus(ctx: ExtensionContext): boolean {
 	try {
-		ctx.ui.setStatus(RUNNING_KEY, runningStatusText());
+		const running = activeRunningText();
+		const base = statusText(ctx);
+		// Running information goes first so a narrow footer never truncates it
+		// behind the capability markers.
+		ctx.ui.setStatus(STATUS_KEY, running ? `${running} · ${base}` : base);
+		ctx.ui.setStatus(RUNNING_KEY, undefined);
+		return true;
 	} catch {
 		// UI gone; stop ticking
 		stopRunningTimer();
 		runningCtx = undefined;
+		return false;
 	}
 }
 
 function refreshStatus(ctx: ExtensionContext): void {
 	runningCtx = ctx;
-	try {
-		ctx.ui.setStatus(STATUS_KEY, statusText(ctx));
-		writeRunningStatus(ctx);
-	} catch {
-		// UI may already be gone (shutdown)
-	}
-	const hasRunning = runningJobs().length > 0;
-	if (hasRunning && !runningTimer) {
+	if (!writeStatus(ctx)) return;
+	const hasActive = activeRunningText() !== undefined;
+	if (hasActive && !runningTimer) {
 		runningTimer = setInterval(() => {
-			if (runningCtx) writeRunningStatus(runningCtx);
+			if (runningCtx) refreshStatus(runningCtx);
 		}, RUNNING_REFRESH_MS);
 		runningTimer.unref?.();
-	} else if (!hasRunning) {
+	} else if (!hasActive) {
 		stopRunningTimer();
 	}
 }

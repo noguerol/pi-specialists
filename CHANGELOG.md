@@ -4,6 +4,17 @@ All notable changes to this project are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/) and
 [Semantic Versioning](https://semver.org/).
 
+## [1.0.1] - 2026-11-02
+
+### Fixed
+
+- The live running line is now part of the primary footer status and is drawn
+  first, so it remains visible when the footer is narrow or already shows other
+  status markers.
+- Jobs shorter than 700 ms keep the frozen line on screen for the remainder of
+  that window. Decision and STT specialists answering in 35–100 ms are now
+  visible instead of flashing past the first repaint.
+
 ## [1.0.0] - 2026-11-02
 
 First public release.
@@ -35,4 +46,5 @@ First public release.
 - Test suite covering logic, protocols, budgets, preprocessing, batching and
   menu navigation.
 
+[1.0.1]: https://github.com/noguerol/pi-specialists/releases/tag/v1.0.1
 [1.0.0]: https://github.com/noguerol/pi-specialists/releases/tag/v1.0.0

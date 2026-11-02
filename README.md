@@ -474,7 +474,9 @@ concurrently. The footer shows one line per running set:
 ```
 
 The line disappears when the last job finishes; the capability markers
-(`👁️● 👂●`) remain in their own footer segment.
+(`👁️● 👂●`) remain in the footer. The running text is drawn first so it is not
+truncated behind the markers, and jobs shorter than 700 ms keep the line on
+screen for that window so a 35 ms decision is still visible.
 
 ## Commands
 
