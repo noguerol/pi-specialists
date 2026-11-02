@@ -53,11 +53,13 @@ import {
 import { budgetSummary, discoverBudget } from "./budget.ts";
 import { executeSpecialist, type SpecialistRunResult } from "./execute.ts";
 import { analyzeVideo } from "./video.ts";
+import { recreateImage } from "./image-recreate.ts";
 import { runningLine, summarizeTask, type RunningInfo } from "./status.ts";
 
 export const TOOL_NAME = "specialist";
 const VIDEO_TOOL_NAME = "video_analyze";
-const MANAGED_TOOLS = [TOOL_NAME, VIDEO_TOOL_NAME];
+const IMAGE_RECREATE_TOOL_NAME = "image_recreate";
+const MANAGED_TOOLS = [TOOL_NAME, VIDEO_TOOL_NAME, IMAGE_RECREATE_TOOL_NAME];
 const STATUS_KEY = "specialists";
 const RUNNING_KEY = "specialists-running";
 const RUNNING_REFRESH_MS = 500;
@@ -482,6 +484,12 @@ function capabilitiesSection(): string | undefined {
 					'For videos, use `video_analyze({ video: "/path/video.mp4", wait: true })`. It samples frames and describes them with an image-to-text specialist, extracts the audio and transcribes it with an ASR specialist, then returns a timeline + transcript report.',
 				]
 			: []),
+		...(active.some((spec) => findType(spec.type)?.input.includes("image")) &&
+		active.some((spec) => canonicalType(spec.type) === "text-to-image")
+			? [
+					'To recreate a source image, use `image_recreate({ image: "/path/image.jpg", wait: true })`. It captions the image with an image-to-text specialist and generates a new image at the source aspect ratio with a text-to-image specialist.',
+				]
+			: []),
 		...lines,
 	].join("\n");
 }
@@ -613,7 +621,7 @@ function firstEnabledOfType(type: string): Specialist | undefined {
 function resolveVideoAnalyst(
 	ref: string | undefined,
 	defaultType: string,
-	kind: "image" | "audio",
+	kind: "image" | "audio" | "text",
 ): Specialist | undefined {
 	if (!ref) return firstEnabledOfType(defaultType);
 	const { specialist, error } = resolveSpecialist(runtime.config, ref);
@@ -956,6 +964,115 @@ export default function specialistsExtension(pi: ExtensionAPI): void {
 				],
 				details: {
 					action: "video",
+					jobId: job.id,
+					mode: "background",
+					dispatchMs,
+					status: "running",
+					waitMs: graceMs,
+				},
+			};
+		},
+	});
+
+	pi.registerTool({
+		name: IMAGE_RECREATE_TOOL_NAME,
+		label: "Recreate image",
+		description:
+			"Recreate a source image through two specialists. Captions the image with an image-to-text specialist " +
+			"using a detailed image-generation prompt that includes the exact source dimensions and aspect ratio, then " +
+			"generates a new image with a text-to-image specialist at matching dimensions. Returns the generated image " +
+			"and the caption used; the full caption/report is saved to a markdown file. Defaults to the first enabled " +
+			"image-to-text and text-to-image specialists. Runs in the background by default; pass wait:true for the " +
+			"complete result inline.",
+		promptSnippet: "image_recreate: caption + regenerate an image with matching aspect ratio",
+		parameters: Type.Object({
+			image: Type.String({ description: "Absolute path or URL of the source image" }),
+			prompt: Type.Optional(Type.String({ description: "Additional instructions for the caption specialist" })),
+			vision: Type.Optional(
+				Type.String({ description: "Image-to-text specialist name/type (default: first enabled image-to-text)" }),
+			),
+			generator: Type.Optional(
+				Type.String({ description: "Text-to-image specialist name/type (default: first enabled text-to-image)" }),
+			),
+			maxSide: Type.Optional(
+				Type.Number({ description: "Maximum output side in pixels (default 1024; aspect ratio is preserved)" }),
+			),
+			width: Type.Optional(Type.Number({ description: "Override output width (pixels)" })),
+			height: Type.Optional(Type.Number({ description: "Override output height (pixels)" })),
+			output: Type.Optional(Type.String({ description: "Path for the generated image" })),
+			waitMs: Type.Optional(
+				Type.Number({ description: "Inline grace in milliseconds before returning a background job (default 500)" }),
+			),
+			wait: Type.Optional(
+				Type.Boolean({ description: "true = wait for the generated image; false = return a job immediately" }),
+			),
+		}),
+		defaultActive: runtime.config.enabled,
+		executionMode: "parallel",
+		async execute(_toolCallId, params, signal, _onUpdate, ctx) {
+			if (!runtime.config.enabled) {
+				throw new Error("Specialists are disabled. Run /specialists on to enable them.");
+			}
+			const vision = resolveVideoAnalyst(params.vision, "image-to-text", "image");
+			const generator = resolveVideoAnalyst(params.generator, "text-to-image", "text");
+			if (!vision || !generator) {
+				throw new Error(
+					"Configure both an image-to-text specialist and a text-to-image specialist before recreating an image.",
+				);
+			}
+			const waitMode = params.wait;
+			const name = basename(String(params.image).split("?")[0]) || "image";
+			const summary = `${name} · ${params.maxSide ?? 1024}px`;
+			const job = startOperation(
+				pi,
+				ctx,
+				{ name: "Image recreation", type: "text-to-image", summary },
+				(onProgress) =>
+					recreateImage(vision, generator, String(params.image), {
+						prompt: params.prompt,
+						maxSide: params.maxSide,
+						width: params.width,
+						height: params.height,
+						output: params.output,
+						outputDir: runtime.config.outputDir,
+						signal: waitMode === true ? signal : undefined,
+						onProgress,
+					}),
+			);
+			const dispatchMs = Date.now() - job.startedAt;
+			const graceMs =
+				waitMode === true
+					? 30 * 60 * 1000
+					: waitMode === false
+						? 0
+						: Math.max(0, Math.min(params.waitMs ?? 500, 10 * 60 * 1000));
+			const outcome = await waitForJob(job, graceMs);
+
+			if (outcome.status === "done") {
+				job.delivered = true;
+				return {
+					content: resultContent(outcome.result, `✅ Image recreation · ${job.elapsedMs} ms`),
+					details: { action: "image_recreate", jobId: job.id, mode: "inline", dispatchMs, ...outcome.result.details },
+				};
+			}
+			if (outcome.status === "error") {
+				throw new Error(`Image recreation: ${outcome.error}`);
+			}
+
+			job.background = true;
+			deliverJob(pi, ctx, job);
+			return {
+				content: [
+					{
+						type: "text",
+						text:
+							`⏱️ Image recreation running in the background · job ${job.id} · dispatch ${dispatchMs} ms.\n` +
+							`No need to wait: the generated image and caption will arrive as a \`specialist-result\` message on the next turn. ` +
+							`To collect it now use specialist({ action: "result", jobId: "${job.id}" }).`,
+					},
+				],
+				details: {
+					action: "image_recreate",
 					jobId: job.id,
 					mode: "background",
 					dispatchMs,

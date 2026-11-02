@@ -4,6 +4,31 @@ All notable changes to this project are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/) and
 [Semantic Versioning](https://semver.org/).
 
+## [1.3.0] - 2026-11-02
+
+### Added
+
+- `comfyui` protocol: posts a ComfyUI workflow to `/prompt`, polls
+  `/history/{prompt_id}` and downloads images from `/view`, with typed
+  `{{prompt}}`, `{{negative_prompt}}`, `{{seed}}`, `{{width}}`, `{{height}}`,
+  `{{steps}}`, `{{cfg}}` placeholders.
+- `image_recreate` tool: captions a source image and regenerates it with a
+  text-to-image specialist, preserving the source aspect ratio and output size,
+  sanitising aspect-ratio/dimension contradictions, and saving a report.
+- Single transformed inputs (one resized image, one PDF page, one text chunk)
+  now return the clean model output instead of a batch header/section.
+- Image-generation prompts are no longer truncated by the chat context budget.
+
+### Fixed
+
+- The configured image-generation specialist pointed at a dead port; the
+  example config now uses the running ComfyUI workflow at 127.0.0.1:8188.
+
+### Verified
+
+- `IMG_8138.jpg` (4032x3024, 4:3) recreated at 1024x768 through Qwen3-VL and
+  Qwen-Image/ComfyUI; caption/size/ratio report saved.
+
 ## [1.2.0] - 2026-11-02
 
 ### Added
@@ -75,6 +100,7 @@ First public release.
 - Test suite covering logic, protocols, budgets, preprocessing, batching and
   menu navigation.
 
+[1.3.0]: https://github.com/noguerol/pi-specialists/releases/tag/v1.3.0
 [1.2.0]: https://github.com/noguerol/pi-specialists/releases/tag/v1.2.0
 [1.1.0]: https://github.com/noguerol/pi-specialists/releases/tag/v1.1.0
 [1.0.1]: https://github.com/noguerol/pi-specialists/releases/tag/v1.0.1

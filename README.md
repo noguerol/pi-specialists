@@ -26,6 +26,7 @@ execution.
 - [Protocols](#protocols)
 - [Authentication](#authentication)
 - [Budgets and batching](#budgets-and-batching)
+- [Image recreation](#image-recreation)
 - [Video analysis](#video-analysis)
 - [Execution model](#execution-model)
 - [Commands](#commands)
@@ -77,6 +78,9 @@ small, dedicated models exposed over HTTP — without leaving the conversation:
 - **Video analysis pipeline**: `video_analyze` samples frames for an
   image-to-text specialist and transcribes the audio with an ASR specialist,
   returning a visual timeline and a transcript.
+- **Image recreation pipeline**: `image_recreate` captions a source image and
+  regenerates it with a text-to-image specialist, preserving the source aspect
+  ratio and producing a reusable caption prompt.
 - **Operational tooling**: `/specialists doctor`, `/specialists probe`, job
   listing, validation of saved configuration.
 - **No telemetry, no external calls** other than the specialist endpoints you
@@ -330,6 +334,7 @@ menu lists every type with its family.
 | `hf-inference` | classification, detection, ASR, embeddings | `POST /models/{model}` |
 | `replicate` | video, music, audio | `/predictions` with polling |
 | `decision` | System-1 transformers sidecars | `POST /decide` with `state` + `questions` + optional `media` |
+| `comfyui` | ComfyUI workflow (text-to-image/edit) | `POST /prompt` + poll `/history/{id}` + download `/view` |
 | `custom-json` | any other JSON API | templated JSON body |
 
 `path` overrides the endpoint (for example when the base URL has no `/v1`).
@@ -455,6 +460,95 @@ specialist({
 Question types depend on the model (`noul`, `choice`, `score`, `text`, `number`,
 `date`, `box`, `boxes`). Images can be passed with `input`; they are sent as
 local paths (no base64 round trip) where possible.
+
+## Image recreation
+
+`image_recreate` chains an image-to-text specialist and a text-to-image
+specialist:
+
+1. Read the source dimensions with ImageMagick `identify` (fallback
+   `ffprobe`) and compute a generation size preserving the aspect ratio, up to
+   `maxSide` (default 1024).
+2. Caption the image with the first enabled `image-to-text` specialist (or
+   `vision`), explicitly asking for the source dimensions/aspect ratio and a
+   clean text-to-image prompt.
+3. Sanitise the caption: force the exact aspect ratio, replace a wrong
+   "square" claim for non-square sources, and replace source pixel dimensions
+   with the actual generation size.
+4. Generate with the first enabled `text-to-image` specialist (or `generator`)
+   at the computed dimensions, using `options.size` for OpenAI-compatible
+   endpoints or `options.width/height` for ComfyUI.
+5. Save a report with the source/output dimensions, the caption prompt and the
+   generated image path. The generated image is also attached to the tool
+   result.
+
+```ts
+image_recreate({
+  image: "/data/photo.jpg",
+  maxSide: 1024,
+  wait: true
+})
+
+image_recreate({
+  image: "/data/photo.jpg",
+  vision: "Local vision",
+  generator: "Qwen Image (ComfyUI)",
+  prompt: "Focus on the lenticular cloud",
+  wait: false               // background job; image arrives next turn
+})
+```
+
+| Parameter | Description |
+|---|---|
+| `image` | Absolute local path or URL of the source image. |
+| `prompt` | Additional instructions for the caption specialist. |
+| `vision` | Image-to-text specialist. Default: first enabled `image-to-text`. |
+| `generator` | Text-to-image specialist. Default: first enabled `text-to-image`. |
+| `maxSide` | Maximum output side (default 1024; aspect ratio preserved). |
+| `width`, `height` | Explicit output size overrides. |
+| `output` | Output path for the generated image. |
+| `waitMs` | Inline grace before returning a job (default 500 ms). |
+| `wait` | `true` for the complete result inline; `false` for a job. |
+
+Image generation is only as faithful as the caption specialist and the
+generator; the pipeline guarantees geometry (aspect ratio and size) and
+removes obvious caption contradictions, not pixel-identical recreation. The
+report keeps the full caption so it can be edited and reused.
+
+### ComfyUI
+
+The `comfyui` protocol accepts a ComfyUI API workflow in `body.workflow` with
+placeholder values. It posts the graph to `/prompt`, polls
+`/history/{prompt_id}`, and downloads every image from `/view`.
+
+```json
+{
+  "name": "Qwen Image (ComfyUI)",
+  "type": "text-to-image",
+  "protocol": "comfyui",
+  "baseUrl": "http://127.0.0.1",
+  "port": 8188,
+  "timeoutMs": 900000,
+  "body": {
+    "workflow": {
+      "5": { "class_type": "TextEncodeQwenImage21",
+             "inputs": { "prompt": "{{prompt}}", "negative_prompt": "{{negative_prompt}}",
+                         "resolution": "{{resolution}}" } },
+      "6": { "class_type": "EmptyQwenImage21Latent",
+             "inputs": { "width": "{{width}}", "height": "{{height}}", "resolution": "{{resolution}}" } }
+    },
+    "width": 1024,
+    "height": 768,
+    "steps": 20,
+    "pollMs": 1000
+  }
+}
+```
+
+Available placeholders: `prompt`, `negative_prompt`, `seed`, `width`, `height`,
+`resolution`, `steps`, `cfg`, `sampler`, `scheduler`, `model`. An exact
+placeholder keeps the value type (numbers stay numbers). ComfyUI generation
+is asynchronous; use a long `timeoutMs` and the background job/`wait` controls.
 
 ## Video analysis
 
@@ -607,6 +701,10 @@ returns a completed job or reports that it is still running.
 
 ### Video analysis tool
 
+`image_recreate` is also registered as a separate tool; see
+[Image recreation](#image-recreation). It shares the job registry, live footer
+progress and `specialist-result` delivery.
+
 `video_analyze` is a separate tool registered by the extension. It accepts the
 parameters in [Video analysis](#video-analysis) and returns the markdown report
 inline (`wait: true`) or a job id that is delivered as a `specialist-result`
@@ -679,6 +777,11 @@ is sent whole.
 Check `ffmpeg`/`ffprobe` availability and that at least one `image-to-text` or
 `automatic-speech-recognition` specialist is enabled. The error/warning names
 the missing half of the pipeline.
+
+**Image recreation fails immediately.**  
+`image_recreate` needs both an enabled `image-to-text` and a `text-to-image`
+specialist. Check the generator endpoint (for ComfyUI, `/system_stats` on port
+8188) and its workflow/model names.
 
 **A YouTube/webpage URL fails.**  
 Install `yt-dlp` (or set `PI_SPECIALISTS_YTDLP` / `YT_DLP`), or download the

@@ -25,6 +25,7 @@ export type OutputKind = "text" | "image" | "audio" | "video" | "json" | "vector
 export type ProtocolId =
 	| "openai-chat"
 	| "openai-images"
+	| "comfyui"
 	| "openai-speech"
 	| "openai-transcriptions"
 	| "openai-embeddings"
@@ -50,6 +51,7 @@ export interface SpecialistTypeInfo {
 export const PROTOCOLS: ProtocolId[] = [
 	"openai-chat",
 	"openai-images",
+	"comfyui",
 	"openai-speech",
 	"openai-transcriptions",
 	"openai-embeddings",
@@ -62,6 +64,7 @@ export const PROTOCOLS: ProtocolId[] = [
 export const PROTOCOL_LABELS: Record<ProtocolId, string> = {
 	"openai-chat": "OpenAI chat/completions (vision, OCR, VQA, text)",
 	"openai-images": "OpenAI images (generation / editing)",
+	comfyui: "ComfyUI workflow (/prompt + /history + /view)",
 	"openai-speech": "OpenAI audio/speech (TTS)",
 	"openai-transcriptions": "OpenAI audio/transcriptions (STT)",
 	"openai-embeddings": "OpenAI embeddings",
@@ -74,6 +77,7 @@ export const PROTOCOL_LABELS: Record<ProtocolId, string> = {
 export const PROTOCOL_DEFAULT_BASE_URL: Record<ProtocolId, string> = {
 	"openai-chat": "https://api.openai.com/v1",
 	"openai-images": "https://api.openai.com/v1",
+	comfyui: "http://127.0.0.1:8188",
 	"openai-speech": "https://api.openai.com/v1",
 	"openai-transcriptions": "https://api.openai.com/v1",
 	"openai-embeddings": "https://api.openai.com/v1",

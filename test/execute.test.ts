@@ -326,6 +326,63 @@ test("long prompts are truncated and max_tokens set from the discovered budget",
 	);
 });
 
+test("comfyui polls history and downloads the generated image", async () => {
+	const outDir = mkdtempSync(join(tmpdir(), "pi-specialists-comfy-"));
+	let historyCalls = 0;
+	await withServer(
+		{
+			"/prompt": (_req, res) => json(res, { prompt_id: "p1" }),
+			"/history/p1": (_req, res) => {
+				historyCalls += 1;
+				if (historyCalls === 1) {
+					json(res, {});
+					return;
+				}
+				json(res, {
+					p1: {
+						outputs: { "9": { images: [{ filename: "out.png", subfolder: "", type: "output" }] } },
+						status: { status_str: "success", completed: true },
+					},
+				});
+			},
+			"/view": (_req, res) => {
+				res.writeHead(200, { "content-type": "image/png" }).end(PNG);
+			},
+		},
+		async (baseUrl, seen) => {
+			const spec = normalizeSpecialist({
+				name: "comfy",
+				type: "text-to-image",
+				protocol: "comfyui",
+				baseUrl,
+				body: {
+					pollMs: 20,
+					width: 64,
+					height: 64,
+					seed: 7,
+					workflow: {
+						"5": { class_type: "TextEncode", inputs: { prompt: "{{prompt}}", seed: "{{seed}}", width: "{{width}}" } },
+					},
+				},
+				timeoutMs: 5_000,
+			});
+			const result = await executeSpecialist(spec, { prompt: "a cat" }, { outputDir: outDir });
+			assert.equal(result.outputs.length, 1);
+			assert.ok(result.outputs[0].path.endsWith(".png"));
+			assert.equal(readFileSync(result.outputs[0].path).subarray(0, 8).toString("hex"), PNG.subarray(0, 8).toString("hex"));
+			assert.ok(historyCalls >= 2);
+			const promptRequest = seen.find((entry) => entry.path === "/prompt")!;
+			const body = JSON.parse(promptRequest.body) as {
+				prompt: { "5": { inputs: { prompt: string; seed: number; width: number } } };
+			};
+			assert.equal(body.prompt["5"].inputs.prompt, "a cat");
+			assert.equal(body.prompt["5"].inputs.seed, 7);
+			assert.equal(body.prompt["5"].inputs.width, 64);
+			assert.ok(seen.some((entry) => entry.path.startsWith("/view")));
+		},
+	);
+});
+
 test("HTTP errors surface status and body, and never leak the key", async () => {
 	await withServer(
 		{

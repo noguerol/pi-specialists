@@ -17,9 +17,11 @@ import type { Specialist } from "./config.ts";
 import {
 	buildRequest,
 	extForMime,
+	joinUrl,
 	mediaKindForMime,
 	mediaRefsFromJson,
 	parseResponse,
+	withPort,
 	type MediaInput,
 } from "./protocols.ts";
 
@@ -296,6 +298,100 @@ async function pollReplicate(
 	return current;
 }
 
+/**
+ * Wait for a ComfyUI prompt, download every output image and persist it like
+ * any other specialist media.
+ */
+async function pollComfyui(
+	initial: Record<string, unknown>,
+	spec: Specialist,
+	headers: Record<string, string>,
+	deadline: number,
+	signal: AbortSignal | undefined,
+	options: RunOptions,
+): Promise<GeneratedMedia[]> {
+	const promptId = initial.prompt_id;
+	if (typeof promptId !== "string" || !promptId) throw new Error("ComfyUI did not return a prompt_id");
+	const base = withPort(spec.baseUrl, spec.port);
+	const pollMs = Math.max(200, Math.min(10_000, Number(spec.body.pollMs ?? 1_500) || 1_500));
+	const getHeaders = { ...headers };
+	delete getHeaders["Content-Type"];
+
+	let history: Record<string, unknown> | undefined;
+	while (!history) {
+		if (Date.now() > deadline) {
+			throw new Error(`ComfyUI did not finish within ${spec.timeoutMs} ms (prompt ${promptId})`);
+		}
+		const response = await fetch(joinUrl(base, `/history/${encodeURIComponent(promptId)}`), {
+			headers: getHeaders,
+			signal,
+		});
+		if (!response.ok) {
+			throw new Error(`ComfyUI history ${response.status}: ${(await response.text()).slice(0, 400)}`);
+		}
+		const data = (await response.json()) as Record<string, unknown>;
+		const item = data[promptId];
+		if (item && typeof item === "object" && !Array.isArray(item)) {
+			history = item as Record<string, unknown>;
+			break;
+		}
+		const elapsed = Date.now() - (deadline - spec.timeoutMs);
+		options.onProgress?.(`ComfyUI ${Math.round(elapsed / 1000)}s`);
+		await sleep(pollMs, signal);
+	}
+
+	const status =
+		history.status && typeof history.status === "object" && !Array.isArray(history.status)
+			? (history.status as Record<string, unknown>)
+			: {};
+	if (status.status_str === "error" || status.completed === false) {
+		const messages = Array.isArray(status.messages)
+			? status.messages.filter((message) => Array.isArray(message) && message[0] === "execution_error")
+			: [];
+		throw new Error(`ComfyUI execution failed: ${JSON.stringify(messages).slice(0, 800) || "unknown error"}`);
+	}
+
+	const images: Array<Record<string, unknown>> = [];
+	const outputs = history.outputs;
+	if (outputs && typeof outputs === "object" && !Array.isArray(outputs)) {
+		for (const node of Object.values(outputs as Record<string, unknown>)) {
+			if (!node || typeof node !== "object" || Array.isArray(node)) continue;
+			const nodeImages = (node as Record<string, unknown>).images;
+			if (!Array.isArray(nodeImages)) continue;
+			for (const image of nodeImages) {
+				if (image && typeof image === "object" && !Array.isArray(image)) {
+					images.push(image as Record<string, unknown>);
+				}
+			}
+		}
+	}
+	if (images.length === 0) {
+		throw new Error(`ComfyUI produced no images: ${JSON.stringify(history.outputs).slice(0, 600)}`);
+	}
+
+	const generated: GeneratedMedia[] = [];
+	for (const [index, image] of images.entries()) {
+		const filename = image.filename;
+		if (typeof filename !== "string" || !filename) continue;
+		const query = new URLSearchParams({
+			filename,
+			subfolder: typeof image.subfolder === "string" ? image.subfolder : "",
+			type: typeof image.type === "string" ? image.type : "output",
+		});
+		const response = await fetch(`${joinUrl(base, "/view")}?${query.toString()}`, {
+			headers: getHeaders,
+			signal,
+		});
+		if (!response.ok) {
+			throw new Error(`ComfyUI view ${response.status}: ${(await response.text()).slice(0, 400)}`);
+		}
+		const bytes = new Uint8Array(await response.arrayBuffer());
+		const mimeType = response.headers.get("content-type")?.split(";")[0].trim() || "image/png";
+		generated.push(await persistBytes(bytes, mimeType, spec, options, index));
+	}
+	return generated;
+}
+
 async function readErrorBody(response: Response): Promise<string> {
 	try {
 		const text = await response.text();
@@ -384,10 +480,25 @@ async function executeSingle(
 		parsed = { kind: "json", json };
 	}
 
+	let comfyOutputs: GeneratedMedia[] | undefined;
+	if (spec.protocol === "comfyui" && json && typeof json === "object") {
+		comfyOutputs = await pollComfyui(
+			json as Record<string, unknown>,
+			spec,
+			built.headers,
+			deadline,
+			signal,
+			options,
+		);
+		parsed = { kind: "json", json };
+	}
+
 	const outputs: GeneratedMedia[] = [];
 	const textParts: string[] = [];
 
-	if (parsed.kind === "text") {
+	if (comfyOutputs && comfyOutputs.length > 0) {
+		outputs.push(...comfyOutputs);
+	} else if (parsed.kind === "text") {
 		if (parsed.text) textParts.push(parsed.text);
 	} else if (parsed.kind === "binary") {
 		const media = await persistBytes(parsed.data ?? new Uint8Array(), parsed.mimeType, spec, options, 0);
@@ -518,6 +629,9 @@ export async function executeSpecialist(
 	const inputs = request.input ?? [];
 	// A long prompt without files still has to fit the context window.
 	const fitLongPrompt = async (): Promise<SpecialistRunResult | undefined> => {
+		// Image-generation protocols do not use the chat context budget; their
+		// prompt is consumed by a text encoder with its own rules.
+		if (spec.protocol === "comfyui" || spec.protocol === "openai-images") return undefined;
 		if (estimateTokens(request.prompt) <= 1_024) return undefined;
 		const budget = await discoverBudget(spec, options.signal);
 		const fitted = fitPrompt(request.prompt ?? "", budget);
@@ -554,6 +668,35 @@ export async function executeSpecialist(
 			warnings.length === 0
 		) {
 			return executeSingle(spec, request, options);
+		}
+
+		// A single transformed item (one resized image, one PDF page, one text
+		// chunk) should not grow a batch header/section around the model output.
+		// This keeps captioning and other chained calls clean.
+		if (prepared.items.length === 1) {
+			const item = prepared.items[0];
+			const basePrompt = request.prompt ?? "";
+			const prompt = item.text ? [basePrompt, item.text].filter(Boolean).join("\n\n") : basePrompt;
+			const fitted = fitPrompt(prompt, budget);
+			if (fitted.truncated) warnings.push(`prompt truncated to ~${budget.contextTokens} tokens.`);
+			const extraOptions = itemOptions(spec, request.options, budget);
+			const itemOptionsValue =
+				item.text && spec.protocol === "decision"
+					? { ...(extraOptions ?? {}), state: item.text }
+					: extraOptions;
+			const result = await executeSingle(
+				spec,
+				{
+					prompt: fitted.text,
+					input: item.path ? [item.path] : [],
+					options: itemOptionsValue,
+				},
+				{ ...options, output: options.output, onProgress: options.onProgress },
+			);
+			return {
+				...result,
+				details: { ...result.details, ...(warnings.length > 0 ? { warnings } : {}) },
+			};
 		}
 
 		const total = prepared.items.length;

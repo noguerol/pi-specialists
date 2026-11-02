@@ -205,6 +205,34 @@ function decisionMedia(input: MediaInput): Record<string, string> | undefined {
 	return undefined;
 }
 
+/**
+ * Replace `{{name}}` placeholders in a ComfyUI workflow. An exact placeholder
+ * keeps the value type (numbers for width/height/seed), embedded placeholders
+ * are stringified.
+ */
+export function templateDeep(value: unknown, context: Record<string, unknown>): unknown {
+	if (typeof value === "string") {
+		const exact = /^\{\{\s*([a-z0-9_.-]+)\s*\}\}$/i.exec(value);
+		if (exact) {
+			const replacement = context[exact[1]];
+			return replacement === undefined || replacement === null ? value : replacement;
+		}
+		return value.replace(/\{\{\s*([a-z0-9_.-]+)\s*\}\}/gi, (match, key: string) => {
+			const replacement = context[key];
+			return replacement === undefined || replacement === null ? match : String(replacement);
+		});
+	}
+	if (Array.isArray(value)) return value.map((item) => templateDeep(item, context));
+	if (value && typeof value === "object") {
+		const out: Record<string, unknown> = {};
+		for (const [key, item] of Object.entries(value as Record<string, unknown>)) {
+			out[key] = templateDeep(item, context);
+		}
+		return out;
+	}
+	return value;
+}
+
 function defaultPath(spec: Specialist): string {
 	if (spec.path) return spec.path;
 	switch (spec.protocol) {
@@ -212,6 +240,8 @@ function defaultPath(spec: Specialist): string {
 			return "/chat/completions";
 		case "openai-images":
 			return "/images/generations";
+		case "comfyui":
+			return "/prompt";
 		case "openai-speech":
 			return "/audio/speech";
 		case "openai-transcriptions":
@@ -381,6 +411,43 @@ export function buildRequest(spec: Specialist, request: SpecialistRequest): Buil
 				...(media.length > 0 ? { media } : {}),
 			};
 			body = JSON.stringify(payload);
+			headers["Content-Type"] = "application/json";
+			responseKind = "json";
+			break;
+		}
+
+		case "comfyui": {
+			const workflow = spec.body.workflow;
+			if (!workflow || typeof workflow !== "object" || Array.isArray(workflow)) {
+				throw new Error('The comfyui protocol requires a workflow object in "body.workflow"');
+			}
+			const bodyWithoutWorkflow: Record<string, unknown> = { ...spec.body };
+			delete bodyWithoutWorkflow.workflow;
+			const width = Number(options.width ?? bodyWithoutWorkflow.width ?? 1024);
+			const height = Number(options.height ?? bodyWithoutWorkflow.height ?? 1024);
+			const context: Record<string, unknown> = {
+				...bodyWithoutWorkflow,
+				...options,
+				prompt,
+				negative_prompt: options.negative_prompt ?? bodyWithoutWorkflow.negative_prompt ?? "",
+				seed:
+					options.seed ??
+					bodyWithoutWorkflow.seed ??
+					Math.floor(Math.random() * 2 ** 31),
+				width,
+				height,
+				resolution: Math.max(width, height),
+				steps: options.steps ?? bodyWithoutWorkflow.steps ?? 25,
+				cfg: options.cfg ?? bodyWithoutWorkflow.cfg ?? 1,
+				sampler: options.sampler ?? bodyWithoutWorkflow.sampler ?? "euler",
+				scheduler: options.scheduler ?? bodyWithoutWorkflow.scheduler ?? "simple",
+				model: spec.model,
+			};
+			const graph = templateDeep(workflow, context);
+			body = JSON.stringify({
+				prompt: graph,
+				client_id: `pi-specialists-${Date.now()}`,
+			});
 			headers["Content-Type"] = "application/json";
 			responseKind = "json";
 			break;

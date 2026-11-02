@@ -251,6 +251,44 @@ test("ASR transcripts strip the language<asr_text> prefix", async () => {
 	assert.equal(parsed.language, "Spanish");
 });
 
+test("comfyui builds a workflow with typed placeholders", () => {
+	const built = buildRequest(
+		spec({
+			type: "text-to-image",
+			protocol: "comfyui",
+			baseUrl: "http://127.0.0.1",
+			port: 8188,
+			body: {
+				width: 512,
+				height: 256,
+				seed: 42,
+				negative_prompt: "blurry",
+				workflow: {
+					"5": {
+						class_type: "TextEncode",
+						inputs: {
+							prompt: "{{prompt}}",
+							negative_prompt: "{{negative_prompt}}",
+							seed: "{{seed}}",
+							width: "{{width}}",
+							resolution: "{{resolution}}",
+						},
+					},
+				},
+			},
+		}),
+		{ prompt: "a cat" },
+	);
+	assert.equal(built.url, "http://127.0.0.1:8188/prompt");
+	const body = bodyJson(built);
+	assert.equal(body.prompt["5"].inputs.prompt, "a cat");
+	assert.equal(body.prompt["5"].inputs.negative_prompt, "blurry");
+	assert.equal(body.prompt["5"].inputs.seed, 42);
+	assert.equal(body.prompt["5"].inputs.width, 512);
+	assert.equal(body.prompt["5"].inputs.resolution, 512);
+	assert.ok(typeof body.client_id === "string");
+});
+
 test("custom-json substitutes template placeholders", () => {
 	const built = buildRequest(
 		spec({
