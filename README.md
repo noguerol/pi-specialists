@@ -133,6 +133,7 @@ independent from pi so it can be tested with plain Node:
   OpenAI-compatible endpoint, OpenAI, Hugging Face and Replicate are all valid.
 - Optional, for batching and video:
   - `ffmpeg` and `ffprobe` — image resize, audio split, video frames/audio;
+  - `yt-dlp` — optional, for webpage/YouTube URLs in `video_analyze`;
   - `poppler-utils` (`pdftoppm`, `pdfinfo`) — PDF pages;
   - ImageMagick `identify` — fast image dimensions.
 
@@ -458,12 +459,14 @@ local paths (no base64 round trip) where possible.
 ## Video analysis
 
 The `video_analyze` tool provides a fast, end-to-end interpretation path for
-any video:
+any video. It accepts a local file, a direct media URL, or a webpage/YouTube URL
+(downloaded with `yt-dlp` when available).
 
 1. **Probe** duration, resolution and audio with `ffprobe`.
 2. **Sample frames** — by default one frame per second up to 12 frames, then 12
    evenly spaced frames for longer videos. Override with `frames` (1–24) or
-   `interval` (seconds).
+   `interval` (seconds). Long videos are sampled with fast per-frame seeks
+   instead of decoding the complete timeline.
 3. **Describe frames** with the first enabled `image-to-text` specialist (or
    the specialist named in `vision`). Frames are sent through the normal
    budget-aware batch pipeline, so oversized frames are resized.
@@ -491,7 +494,7 @@ video_analyze({
 
 | Parameter | Description |
 |---|---|
-| `video` | Absolute local path or URL. |
+| `video` | Absolute local path, direct media URL, or webpage/YouTube URL. |
 | `prompt` | Optional instruction for the frame/vision specialist. |
 | `frames` | Number of frames (1–24). |
 | `interval` | Seconds between frames; overrides `frames`. |
@@ -503,8 +506,17 @@ video_analyze({
 
 If only one of the two specialists is configured, the pipeline still returns
 the half it can produce (frames/timeline or transcript) and records a warning.
-If neither is configured, it fails with a configuration hint. Video processing
-requires `ffmpeg`/`ffprobe`; the rest of the extension does not.
+If neither is configured, it fails with a configuration hint.
+
+For webpage/YouTube URLs the tool uses `yt-dlp`, preferring a 720p video+audio
+stream, and reads the title from yt-dlp metadata for the report. Set
+`PI_SPECIALISTS_YTDLP` or `YT_DLP` when the binary is not on `PATH`. Without
+yt-dlp the tool returns a clear error; direct media URLs and local files still
+work. `yt-dlp` may warn that no JavaScript runtime (deno) is installed; most
+formats still download, but installing deno enables the full format set.
+
+Video processing requires `ffmpeg`/`ffprobe` (and optionally `yt-dlp` for
+webpage URLs); the rest of the extension does not.
 
 The report is designed for the calling agent: it can use the transcript for
 spoken content and the timeline for visual context, then write the final
@@ -667,6 +679,12 @@ is sent whole.
 Check `ffmpeg`/`ffprobe` availability and that at least one `image-to-text` or
 `automatic-speech-recognition` specialist is enabled. The error/warning names
 the missing half of the pipeline.
+
+**A YouTube/webpage URL fails.**  
+Install `yt-dlp` (or set `PI_SPECIALISTS_YTDLP` / `YT_DLP`), or download the
+media and pass the local file. If yt-dlp warns about a missing JavaScript
+runtime, install deno for the complete format set; the default 720p selection
+usually works without it.
 
 **A batch is truncated.**  
 `budget.maxItems` (default 200) caps the number of work items. Raise it or

@@ -176,3 +176,23 @@ test("analyzeVideo builds a timeline and transcript", { skip: !has("ffmpeg") }, 
 test("analyzeVideo requires at least one specialist", async () => {
 	await assert.rejects(() => analyzeVideo("/does/not/exist.mp4", undefined, undefined), /Configure an image-to-text/);
 });
+
+test("a webpage URL without yt-dlp gives a clear error", async () => {
+	const previous = process.env.PI_SPECIALISTS_YTDLP;
+	process.env.PI_SPECIALISTS_YTDLP = "/nonexistent/yt-dlp";
+	const vision = normalizeSpecialist({
+		name: "Vision",
+		type: "image-to-text",
+		baseUrl: "http://127.0.0.1",
+		model: "m",
+	});
+	try {
+		await assert.rejects(
+			() => analyzeVideo("https://example.invalid/watch?v=abc", vision, undefined, {}),
+			/yt-dlp is required/,
+		);
+	} finally {
+		if (previous === undefined) delete process.env.PI_SPECIALISTS_YTDLP;
+		else process.env.PI_SPECIALISTS_YTDLP = previous;
+	}
+});

@@ -13,7 +13,7 @@
  */
 
 import { execFile } from "node:child_process";
-import { mkdir, mkdtemp, readdir, rm, stat, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readdir, readFile, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { basename, extname, join } from "node:path";
 import { promisify } from "node:util";
@@ -89,6 +89,79 @@ function displayName(value: string): string {
 		// use the raw value
 	}
 	return basename(value) || "video";
+}
+
+const DIRECT_MEDIA_EXT = new Set([".mp4", ".webm", ".mkv", ".mov", ".m4v", ".avi", ".ogv", ".mpg", ".mpeg"]);
+
+function hasDirectMediaExtension(value: string): boolean {
+	try {
+		const path = /^https?:\/\//i.test(value) ? new URL(value).pathname : value;
+		return DIRECT_MEDIA_EXT.has(extname(path).toLowerCase());
+	} catch {
+		return false;
+	}
+}
+
+function errorDetail(error: unknown): string {
+	const object = error as { stderr?: string; stdout?: string; message?: string };
+	return (object.stderr || object.stdout || object.message || String(error)).trim().slice(-800);
+}
+
+/**
+ * Download a webpage/YouTube URL with yt-dlp when needed. Direct media URLs
+ * are left to ffmpeg/ffprobe. The binary can be overridden with
+ * PI_SPECIALISTS_YTDLP (or YT_DLP).
+ */
+async function materializeVideo(
+	video: string,
+	dir: string,
+	signal?: AbortSignal,
+): Promise<{ source: string; downloaded: boolean; title?: string }> {
+	if (!/^https?:\/\//i.test(video) || hasDirectMediaExtension(video)) {
+		return { source: video, downloaded: false };
+	}
+	const ytdlp = process.env.PI_SPECIALISTS_YTDLP || process.env.YT_DLP || "yt-dlp";
+	const target = join(dir, "source.%(ext)s");
+	try {
+		await command(
+			ytdlp,
+			[
+				"--no-playlist",
+				"-f",
+				"bv*[height<=720]+ba/b[height<=720]",
+				"--merge-output-format",
+				"mp4",
+				"--write-info-json",
+				"-o",
+				target,
+				video,
+			],
+			signal,
+		);
+	} catch (error) {
+		const detail = errorDetail(error);
+		if ((error as NodeJS.ErrnoException).code === "ENOENT") {
+			throw new Error(
+				"yt-dlp is required to analyze this URL. Install yt-dlp (or set PI_SPECIALISTS_YTDLP) or pass a local media file.",
+			);
+		}
+		throw new Error(`yt-dlp failed for ${video}: ${detail || "unknown error"}`);
+	}
+	const files = (await readdir(dir)).filter(
+		(file) => file.startsWith("source.") && !file.endsWith(".part") && !file.endsWith(".info.json"),
+	);
+	if (files.length === 0) throw new Error("yt-dlp finished without producing a media file");
+	let title: string | undefined;
+	const infoFile = (await readdir(dir)).find((file) => file.startsWith("source.") && file.endsWith(".info.json"));
+	if (infoFile) {
+		try {
+			const info = JSON.parse(await readFile(join(dir, infoFile), "utf-8")) as { title?: unknown };
+			if (typeof info.title === "string" && info.title.trim()) title = info.title.trim();
+		} catch {
+			// metadata is optional
+		}
+	}
+	return { source: join(dir, files[0]), downloaded: true, ...(title ? { title } : {}) };
 }
 
 async function command(file: string, args: string[], signal?: AbortSignal): Promise<string> {
@@ -177,30 +250,64 @@ async function extractFrames(
 	video: string,
 	plan: FramePlan,
 	dir: string,
+	duration: number,
 	signal?: AbortSignal,
 ): Promise<ExtractedFrame[]> {
-	const fps = 1 / Math.max(0.001, plan.interval);
-	await command(
-		"ffmpeg",
-		[
-			"-y",
-			"-loglevel",
-			"error",
-			"-i",
-			video,
-			"-vf",
-			`fps=${fps}`,
-			"-frames:v",
-			String(plan.frames),
-			"-q:v",
-			"2",
-			join(dir, "frame-%04d.jpg"),
-		],
-		signal,
-	);
-	const files = (await readdir(dir))
-		.filter((file) => /^frame-\d+\.jpg$/.test(file))
-		.sort();
+	const files: string[] = [];
+	if (duration > 30) {
+		// Long videos: seek to each timestamp instead of decoding the whole
+		// timeline. Input seeking is fast and keeps memory/CPU bounded.
+		for (let index = 0; index < plan.frames; index++) {
+			const name = `frame-${String(index + 1).padStart(4, "0")}.jpg`;
+			const target = join(dir, name);
+			try {
+				await command(
+					"ffmpeg",
+					[
+						"-y",
+						"-loglevel",
+						"error",
+						"-ss",
+						String(plan.timestamps[index]),
+						"-i",
+						video,
+						"-frames:v",
+						"1",
+						"-q:v",
+						"2",
+						target,
+					],
+					signal,
+				);
+				files.push(name);
+			} catch {
+				// Skip a frame that cannot be decoded; keep the rest.
+			}
+		}
+	} else {
+		const fps = 1 / Math.max(0.001, plan.interval);
+		await command(
+			"ffmpeg",
+			[
+				"-y",
+				"-loglevel",
+				"error",
+				"-i",
+				video,
+				"-vf",
+				`fps=${fps}`,
+				"-frames:v",
+				String(plan.frames),
+				"-q:v",
+				"2",
+				join(dir, "frame-%04d.jpg"),
+			],
+			signal,
+		);
+		files.push(
+			...(await readdir(dir)).filter((file) => /^frame-\d+\.jpg$/.test(file)).sort(),
+		);
+	}
 	if (files.length === 0) throw new Error("ffmpeg produced no frames");
 	// Use the planned timestamps for the frames we actually got.
 	return files.map((file, index) => ({
@@ -257,23 +364,33 @@ export async function analyzeVideo(
 ): Promise<SpecialistRunResult> {
 	if (!vision && !stt) throw new Error("Configure an image-to-text specialist, an ASR specialist, or both");
 	const warnings: string[] = [];
-	const probe = await probeVideo(video, options.signal);
-	if (!probe.hasVideo) throw new Error("The input has no video stream");
-	const plan = planFrames(probe.duration, options);
 	const dir = await mkdtemp(join(tmpdir(), "pi-specialists-video-"));
 	const frames: ExtractedFrame[] = [];
 	let visionText = "";
 	let transcript = "";
 	let language: string | undefined;
 	let audioPath: string | undefined;
+	let source = video;
+	let downloaded = false;
+	let title = displayName(video);
 
 	try {
+		if (/^https?:\/\//i.test(video) && !hasDirectMediaExtension(video)) {
+			options.onProgress?.("downloading URL");
+			const materialized = await materializeVideo(video, dir, options.signal);
+			source = materialized.source;
+			downloaded = materialized.downloaded;
+			if (materialized.title) title = materialized.title;
+		}
+		const probe = await probeVideo(source, options.signal);
+		if (!probe.hasVideo) throw new Error("The input has no video stream");
+		const plan = planFrames(probe.duration, options);
 		options.onProgress?.(`probe ${clock(probe.duration)} · ${probe.width ?? "?"}x${probe.height ?? "?"}`);
 
 		if (vision) {
 			try {
 				options.onProgress?.(`frames 0/${plan.frames}`);
-				frames.push(...(await extractFrames(video, plan, dir, options.signal)));
+				frames.push(...(await extractFrames(source, plan, dir, probe.duration, options.signal)));
 				options.onProgress?.(`frames ${frames.length}/${plan.frames} · analyzing`);
 				const result = await executeSpecialist(
 					vision,
@@ -295,7 +412,7 @@ export async function analyzeVideo(
 
 		if (stt && probe.hasAudio) {
 			options.onProgress?.("audio extracting");
-			audioPath = await extractAudio(video, dir, options.signal);
+			audioPath = await extractAudio(source, dir, options.signal);
 			if (!audioPath) {
 				warnings.push("no usable audio track");
 			} else {
@@ -324,7 +441,6 @@ export async function analyzeVideo(
 			throw new Error(`Video analysis produced no result.${warnings.length ? ` ${warnings.join(" ")}` : ""}`);
 		}
 
-		const title = displayName(video);
 		const lines: string[] = [
 			`# Video analysis: ${title}`,
 			"",
@@ -351,6 +467,8 @@ export async function analyzeVideo(
 			outputs: [],
 			details: {
 				video,
+				title,
+				...(downloaded ? { source: "downloaded" } : {}),
 				duration: probe.duration,
 				width: probe.width,
 				height: probe.height,

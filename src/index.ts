@@ -864,8 +864,9 @@ export default function specialistsExtension(pi: ExtensionAPI): void {
 			"override with frames/interval), describes them with an image-to-text specialist, extracts the audio and " +
 			"transcribes it with an ASR specialist, and returns a markdown report with a visual timeline and transcript. " +
 			"The full report is saved to a file. If no explicit specialists are given, the first enabled image-to-text " +
-			"and ASR specialists are used. Requires ffmpeg/ffprobe. Runs in the background by default; pass wait:true " +
-			"for the complete report inline.",
+			"and ASR specialists are used. Local paths, direct media URLs and webpage/YouTube URLs (downloaded with " +
+			"yt-dlp when installed) are supported. Requires ffmpeg/ffprobe. Runs in the background by default; pass " +
+			"wait:true for the complete report inline.",
 		promptSnippet: "video_analyze: sample frames and transcribe audio to understand a video",
 		parameters: Type.Object({
 			video: Type.String({ description: "Absolute path or URL of the video" }),

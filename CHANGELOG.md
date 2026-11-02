@@ -4,6 +4,21 @@ All notable changes to this project are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/) and
 [Semantic Versioning](https://semver.org/).
 
+## [1.2.0] - 2026-11-02
+
+### Added
+
+- `video_analyze` accepts webpage/YouTube URLs when `yt-dlp` is available
+  (`PI_SPECIALISTS_YTDLP`/`YT_DLP` override), downloads a 720p stream, and uses
+  the yt-dlp title in the report.
+- Long videos are sampled with fast per-frame seeks instead of decoding the
+  entire timeline, keeping analysis time bounded.
+
+### Verified
+
+- Real 16:52 YouTube video (1280x720): 12 frames, 9 transcript chunks,
+  English transcript, 32 s end-to-end including download.
+
 ## [1.1.0] - 2026-11-02
 
 ### Added
@@ -60,6 +75,7 @@ First public release.
 - Test suite covering logic, protocols, budgets, preprocessing, batching and
   menu navigation.
 
+[1.2.0]: https://github.com/noguerol/pi-specialists/releases/tag/v1.2.0
 [1.1.0]: https://github.com/noguerol/pi-specialists/releases/tag/v1.1.0
 [1.0.1]: https://github.com/noguerol/pi-specialists/releases/tag/v1.0.1
 [1.0.0]: https://github.com/noguerol/pi-specialists/releases/tag/v1.0.0
