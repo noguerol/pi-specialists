@@ -1,0 +1,38 @@
+# Changelog
+
+All notable changes to this project are documented here. The format follows
+[Keep a Changelog](https://keepachangelog.com/) and
+[Semantic Versioning](https://semver.org/).
+
+## [1.0.0] - 2026-11-02
+
+First public release.
+
+### Added
+
+- Hugging Face task catalog with 35+ specialist types, families, aliases and
+  per-type defaults.
+- Nine wire protocols: OpenAI-compatible chat/images/speech/transcriptions/
+  embeddings, Hugging Face Inference, Replicate, System-1 `decision` sidecars
+  and templated custom JSON.
+- Flexible authentication: bearer, custom header, query parameter, basic auth
+  or none; secrets via literal, `env:VAR` or `file:/path`.
+- Budget discovery from `/props`, `/v1/models` and local transformers
+  `config.json`, with per-specialist overrides and a `/specialists probe`
+  command.
+- Input preprocessing: directory expansion, PDF page rasterisation, image
+  resize/recompression, audio splitting and text chunking.
+- Budget-aware batching with sequential/parallel execution, partial failure
+  handling, aggregated result sections and a full-result markdown file.
+- Non-blocking execution: inline grace period (`waitMs`), background jobs,
+  next-turn `specialist-result` delivery and job collection actions.
+- Live footer line with specialist, task summary and wallclock time.
+- Interactive configuration menu with hierarchical Esc navigation and a
+  step-back add wizard.
+- Operational commands: `on`/`off`, `config`, `status`, `list`, `add`,
+  `remove`, `enable`/`disable`, `test`, `probe`, `reload` and `doctor`.
+- Scheme-less base URLs and loopback preference for local hostnames.
+- Test suite covering logic, protocols, budgets, preprocessing, batching and
+  menu navigation.
+
+[1.0.0]: https://github.com/noguerol/pi-specialists/releases/tag/v1.0.0

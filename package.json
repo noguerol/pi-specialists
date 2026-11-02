@@ -1,0 +1,57 @@
+{
+  "name": "pi-specialists",
+  "version": "1.0.0",
+  "description": "Budget-aware specialist router for pi: OCR, vision, media generation, speech, embeddings and System-1 decisions on local or remote models.",
+  "keywords": [
+    "pi-package",
+    "pi",
+    "specialists",
+    "router",
+    "ocr",
+    "vision",
+    "text-to-image",
+    "text-to-speech",
+    "automatic-speech-recognition",
+    "multimodal",
+    "llama.cpp",
+    "huggingface",
+    "replicate"
+  ],
+  "author": "pi-specialists contributors",
+  "license": "MIT",
+  "type": "module",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/noguerol/pi-specialists.git"
+  },
+  "homepage": "https://github.com/noguerol/pi-specialists#readme",
+  "bugs": {
+    "url": "https://github.com/noguerol/pi-specialists/issues"
+  },
+  "engines": {
+    "node": ">=22"
+  },
+  "pi": {
+    "extensions": [
+      "./src/index.ts"
+    ]
+  },
+  "files": [
+    "src",
+    "README.md",
+    "LICENSE",
+    "CHANGELOG.md"
+  ],
+  "scripts": {
+    "test": "node --experimental-strip-types --no-warnings --test test/*.test.ts",
+    "typecheck": "tsc --noEmit -p tsconfig.json"
+  },
+  "peerDependencies": {
+    "@earendil-works/pi-coding-agent": "*",
+    "typebox": "*"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.2",
+    "typescript": "^5.7.3"
+  }
+}
